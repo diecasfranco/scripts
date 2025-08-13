@@ -20,7 +20,7 @@ for line in SAMPLE_LIST:
     if type_of_data == "COI":
         os.system("pear -f %s -r %s -o %s -v 15 -n 400 -m 470 -q 30 -j 60" % (LINE[1], LINE[2], LINE[0]))
     elif type_of_data == "16SV4":
-        os.system("pear -f %s -r %s -o %s -v 15 -n 250 -m 400 -q 30 -j 60" % (LINE[1], LINE[2], LINE[0]))
+        os.system("pear -f %s -r %s -o %s -v 15 -n 250 -m 300 -q 30 -j 60" % (LINE[1], LINE[2], LINE[0]))
     elif type_of_data == "16SV1-V2":
         os.system("pear -f %s -r %s -o %s -v 15 -n 250 -m 400 -q 30 -j 60" % (LINE[1], LINE[2], LINE[0]))
     elif type_of_data == "16SV3-V4":
@@ -229,13 +229,13 @@ if type_of_data == "COI":
     os.system("""vsearch --sintax new_zotus.fasta -db /mnt/matrix/symbio/db/MIDORI/MIDORI_with_tax_spikeins_endo_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8
     vsearch --sintax otus.fasta -db /mnt/matrix/symbio/db/MIDORI/MIDORI_with_tax_spikeins_endo_RDP.fasta -tabbedout otus.tax -strand both -sintax_cutoff 0.8 --threads 60""")
 elif type_of_data == "16SV4":
-    os.system("""vsearch --sintax new_zotus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8
-vsearch --sintax otus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout otus.tax -strand both -sintax_cutoff 0.8 --threads 60""")
+    os.system("""vsearch --sintax new_zotus.fasta -db /home/diego/databases/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8
+vsearch --sintax otus.fasta -db /home/diego/databases/SILVA_endo_spikeins_RDP.fasta -tabbedout otus.tax -strand both -sintax_cutoff 0.8 --threads 60""")
 elif type_of_data == "16SV1-V2":
-    os.system("""vsearch --sintax new_zotus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8
+    os.system("""vsearch --sintax new_zotus.fasta -db /home/diego/databases/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8
 vsearch --sintax otus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout otus.tax -strand both -sintax_cutoff 0.8 --threads 60""")    
 elif type_of_data == "16SV3-V4":
-    os.system("""vsearch --sintax new_zotus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8 --threads 60
+    os.system("""vsearch --sintax new_zotus.fasta -db /home/diego/databases/SILVA_endo_spikeins_RDP.fasta -tabbedout zotus.tax -strand both -sintax_cutoff 0.8 --threads 60
 vsearch --sintax otus.fasta -db /mnt/matrix/symbio/db/SILVA_138/SILVA_endo_spikeins_RDP.fasta -tabbedout otus.tax -strand both -sintax_cutoff 0.8 --threads 60""") 
     
 ###Removing redundant info from out taxonomy files:
@@ -248,4 +248,4 @@ sed -i 's/[dpcofgs]\://g' otus.tax""")
 os.system("""combine_zOTU_files.py all_libraries_zotu_table.txt zotus.tax new_zotus.fasta zotu_otu_relationships.txt
 combine_OTU_files.py otu_table.txt otus.tax otus.fasta""")
 
-print("Symbio® Na zdrowie! Salud! Gānbēi (干杯)! Skål!")
+print("Symbio® Na zdrowie! Salud! Gānbēi (干杯)! Skål!")                              

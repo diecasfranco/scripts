@@ -29,13 +29,45 @@ import glob
 import csv
 import pickle
 import re
-import psutil
 import urllib.request
+import gzip
 #==============================================================================
+"""
+Abbreviations from nanopore:
+    
+LIGATION KITS
+
+  lsk: ligation sequencing kit (lsk109, lsk110, lsk114)
+  nbd: native barcoding kit           (NB barcodes)
+  mlk: multiplex ligation kit         (NB barcodes)
+  cs9: Cas9 sequencing kit                              Discontinued
+  
+  pbc: PCR barcoding expansion kit    (BC barcodes) (not a sequencing kit)
+  
+RAPID KITS
+  
+  rad: rapid sequencing kit
+  rbk: rapid barcoding kit            (RB barcodes)
+  ulk: ultra long DNA sequencing kit
+  lrk: Field sequencing kit                             Discontinued
+  psk: PCR sequencing kit                               Discontinued
+  pbk: PCR barcoding kit              (BP barcodes)     Discontinued
+  rpb: rapid PCR barcoding kit        (RLB barcodes)
+  16s: 16s barcoding kit              (16s barcodes)
+  rab: 16s rapid barcoding kit        (16s barcodes)    Discontinued
+
+RNA - cDNA KITS
+
+  rna: direct RNA sequencing kit
+  pcs: cDNA PCR sequencing kit   (contains UMI ???)
+  dcs: direct cDNA sequencing kit                       Discontinued
+  pcb: cDNA PCR barcoding kit         (BP barcodes)
+
+"""
 adapters = {
     'ATCGCCTACCGTGAC---BC---AGAGTTTGATCMTGGCTCAG': ['flank_16s_rab_forward'], 
     'ATCGCCTACCGTGAC---BC---CGGTTACCTTGTTACGACTT': ['flank_16s_rab_reverse'], 
-    'GGTGCTG---BC---TTAACCT': ['flank_pbc'], 
+    'GGTGCTG---BC---TTAACCT': ['flank_pbc_forward'], 
     'GCTTGGGTGTTTAACC---BC---GTTTTCGCATTTATCGTGAAACGCTTTCGCGTTTTTCGTGCGCCGCTTCA': ['flank_rbk'], 
     'ATCGCCTACCGTGAC---BC---ACTTGCCTGTCGCTCTATCTTC': ['flank_pbk_forward'], 
     'ATCGCCTACCGTGAC---BC---TTTCTGTTGGTGCTGATATTGC': ['flank_pbk_reverse'], 
@@ -43,121 +75,126 @@ adapters = {
     'ATCGCCTACCGTGA---BC---TCTGTTGGTGCTGATATTGC': ['flank_pcb_reverse'], 
     'ATCGCCTACCGTGAC---BC---CGTTTTTCGTGCGCCGCTTC': ['flank_rpb'], 
     'AAGGTTAA---BC---CAGCACCT': ['flank_nbd'], 
-    'MMTGTACTTCGTTCAGTTACGTATTGCT': ['adapter_lsk109_front', 'adapter_lsk114_front', 
-                                     'adapter_rapid', 'adapter_cas9_front', 'adapter_cdna_pcs_rapt', 
-                                     'adapter_cdna_dcs_amx_front'], 
+    'MMTGTACTTCGTTCAGTTACGTATTGCT': ['adapter_lsk109_front', 'adapter_lsk114_front', 'adapter_nbd_front',
+                                     'adapter_rad_front', 'adapter_cs9_front', 'adapter_cdna_pcs_rapt_front', 
+                                     'adapter_cdna_dcs_amx_front', 'adapter_mlk_front', 'adapter_rbk_front',
+                                     'adapter_ulk_front', 'adapter_lrk_front', 'adapter_psk_front', 'adapter_pbk_front',
+                                     'adapter_rpb_front', 'adapter_16s_front', 'adapter_rab_front', 'adapter_pcb_front'], 
     'AGCAATACGTAACTGAACGAAGT': ['adapter_lsk109_rear'], 
     'MMTGTACTTCGTTCAGTTACGTATTGC': ['adapter_lsk110_front'], 
     'AGCAATACGTAACTGAAC': ['adapter_lsk110_rear'], 
-    'GCAATACGTAACTGAACGAAGTACAGG': ['adapter_lsk114_rear'], 
+    'GCAATACGTAACTGAACGAAGTACAGG': ['adapter_lsk114_rear', 'adapter_mlk_rear'], 
+    'ACGTAACTGAACGAAGTACAGG': ['adapter_nbd_rear'], 
     'ACTTCGTTCAGTTACGTATTGCT': ['adapter_middle'], 
-    'GCAATACGTAACTGAACGAAGT': ['adapter_cas9_rear', 'adapter_cdna_dcs_amx_rear'], 
-    'GGCTTCTTCTTGCTCTTAGGTAGTAGGTTC': ['adapter_rna_rtaf'], 
-    'GAGGCGAGCGGTCAATTTTCCTAAGAGCAAGAAGAAGCC': ['adapter_rna_rtar'], 
-    'ATGATGCAAGATACGCAC': ['adapter_rna_rmxf'], 
-    'GAGGCGAGCGGTCAATTTGCAATATCAGCACCAACAGAAACAACCATCGTCTATCCCTCATCATCAGAACCTACTA': ['adapter_rna_rmxr'], 
-    'CTTGCCTGTCGCTCTATCTTCAGAGGAG': ['adapter_cdna_pcs_rtp'], 
-    'TTTCTGTTGGTGCTGATATTGCTGGG': ['adapter_cdna_pcs_sspii', 'adapter_cdna_dcs_ssp'], 
-    'ATCGCCTACCGTGACAAGAAAGTTGTCGGTGTCTTTGTGACTTGCCTGTCGCTCTATCTTC': ['adapter_cdna_pcs_front'], 
-    'ATCGCCTACCGTGACAAGAAAGTTGTCGGTGTCTTTGTGTTTCTGTTGGTGCTGATATTG': ['adapter_cdna_pcs_rear'], 
-    'CTTGCGGGCGGCGGACTCTCCTCTGAAGATAGAGCGACAGGCAAG': ['adapter_cdna_pcs_rt'], 
-    'ACTTGCCTGTCGCTCTATCTTC': ['adapter_cdna_dcs_vnp'], 
-    'CACAAAGACACCGACAACTTTCTT': ['bc01_nbd'], 
-    'ACAGACGACTACAAACGGAATCGA': ['bc02_nbd'], 
-    'CCTGGTAACTGGGACACAAGACTC': ['bc03_nbd'], 
-    'TAGGGAAACACGATAGAATCCGAA': ['bc04_nbd'], 
-    'AAGGTTACACAAACCCTGGACAAG': ['bc05_nbd'], 
-    'GACTACTTTCTGCCTTTGCGAGAA': ['bc06_nbd'], 
-    'AAGGATTCATTCCCACGGTAACAC': ['bc07_nbd'], 
-    'ACGTAACTTGGTTTGTTCCCTGAA': ['bc08_nbd'], 
-    'AACCAAGACTCGCTGTGCCTAGTT': ['bc09_nbd'], 
-    'GAGAGGACAAAGGTTTCAACGCTT': ['bc10_nbd'], 
-    'TCCATTCCCTCCGATAGATGAAAC': ['bc11_nbd'], 
-    'TCCGATTCTGCTTCTTTCTACCTG': ['bc12_nbd'], 
-    'AGAACGACTTCCATACTCGTGTGA': ['bc13_nbd', 'bc13_rbk_pbc_rab_16s_pcb'], 
-    'AACGAGTCTCTTGGGACCCATAGA': ['bc14_nbd', 'bc14_rbk_pbc_rab_16s_pcb'], 
-    'AGGTCTACCTCGCTAACACCACTG': ['bc15_nbd', 'bc15_rbk_pbc_rab_16s_pcb'], 
-    'CGTCAACTGACAGTGGTTCGTACT': ['bc16_nbd', 'bc16_rbk_pbc_rab_16s_pcb'], 
-    'ACCCTCCAGGAAAGTACCTCTGAT': ['bc17_nbd', 'bc17_rbk_pbc_rab_16s_pcb'], 
-    'CCAAACCCAACAACCTAGATAGGC': ['bc18_nbd', 'bc18_rbk_pbc_rab_16s_pcb'], 
-    'GTTCCTCGTGCAGTGTCAAGAGAT': ['bc19_nbd', 'bc19_rbk_pbc_rab_16s_pcb'], 
-    'TTGCGTCCTGTTACGAGAACTCAT': ['bc20_nbd', 'bc20_rbk_pbc_rab_16s_pcb'], 
-    'GAGCCTCTCATTGTCCGTTCTCTA': ['bc21_nbd', 'bc21_rbk_pbc_rab_16s_pcb'], 
-    'ACCACTGCCATGTATCAAAGTACG': ['bc22_nbd', 'bc22_rbk_pbc_rab_16s_pcb'], 
-    'CTTACTACCCAGTGAACCTCCTCG': ['bc23_nbd', 'bc23_rbk_pbc_rab_16s_pcb'], 
-    'GCATAGTTCTGCATGATGGGTTAG': ['bc24_nbd', 'bc24_rbk_pbc_rab_16s_pcb'], 
-    'GTAAGTTGGGTATGCAACGCAATG': ['bc25_nbd', 'bc25_rbk_pbc'], 
-    'CATACAGCGACTACGCATTCTCAT': ['bc26_nbd', 'bc26_rbk_pbc'], 
-    'CGACGGTTAGATTCACCTCTTACA': ['bc27_nbd', 'bc27_rbk_pbc'], 
-    'TGAAACCTAAGAAGGCACCGTATC': ['bc28_nbd', 'bc28_rbk_pbc'], 
-    'CTAGACACCTTGGGTTGACAGACC': ['bc29_nbd', 'bc29_rbk_pbc'], 
-    'TCAGTGAGGATCTACTTCGACCCA': ['bc30_nbd', 'bc30_rbk_pbc'], 
-    'TGCGTACAGCAATCAGTTACATTG': ['bc31_nbd', 'bc31_rbk_pbc'], 
-    'CCAGTAGAAGTCCGACAACGTCAT': ['bc32_nbd', 'bc32_rbk_pbc'], 
-    'CAGACTTGGTACGGTTGGGTAACT': ['bc33_nbd', 'bc33_rbk_pbc'], 
-    'GGACGAAGAACTCAAGTCAAAGGC': ['bc34_nbd', 'bc34_rbk_pbc'], 
-    'CTACTTACGAAGCTGAGGGACTGC': ['bc35_nbd', 'bc35_rbk_pbc'], 
-    'ATGTCCCAGTTAGAGGAGGAAACA': ['bc36_nbd', 'bc36_rbk_pbc'], 
-    'GCTTGCGATTGATGCTTAGTATCA': ['bc37_nbd', 'bc37_rbk_pbc'], 
-    'ACCACAGGAGGACGATACAGAGAA': ['bc38_nbd', 'bc38_rbk_pbc'], 
-    'CCACAGTGTCAACTAGAGCCTCTC': ['bc39_nbd', 'bc39_rbk_pbc'], 
-    'TAGTTTGGATGACCAAGGATAGCC': ['bc40_nbd', 'bc40_rbk_pbc'], 
-    'GGAGTTCGTCCAGAGAAGTACACG': ['bc41_nbd', 'bc41_rbk_pbc'], 
-    'CTACGTGTAAGGCATACCTGCCAG': ['bc42_nbd', 'bc42_rbk_pbc'], 
-    'CTTTCGTTGTTGACTCGACGGTAG': ['bc43_nbd', 'bc43_rbk_pbc'], 
-    'AGTAGAAAGGGTTCCTTCCCACTC': ['bc44_nbd', 'bc44_rbk_pbc'], 
-    'GATCCAACAGAGATGCCTTCAGTG': ['bc45_nbd', 'bc45_rbk_pbc'], 
-    'GCTGTGTTCCACTTCATTCTCCTG': ['bc46_nbd', 'bc46_rbk_pbc'], 
-    'GTGCAACTTTCCCACAGGTAGTTC': ['bc47_nbd', 'bc47_rbk_pbc'], 
-    'CATCTGGAACGTGGTACACCTGTA': ['bc48_nbd', 'bc48_rbk_pbc'], 
-    'ACTGGTGCAGCTTTGAACATCTAG': ['bc49_nbd', 'bc49_rbk_pbc'], 
-    'ATGGACTTTGGTAACTTCCTGCGT': ['bc50_nbd', 'bc50_rbk_pbc'], 
-    'GTTGAATGAGCCTACTGGGTCCTC': ['bc51_nbd', 'bc51_rbk_pbc'], 
-    'TGAGAGACAAGATTGTTCGTGGAC': ['bc52_nbd', 'bc52_rbk_pbc'], 
-    'AGATTCAGACCGTCTCATGCAAAG': ['bc53_nbd', 'bc53_rbk_pbc'], 
-    'CAAGAGCTTTGACTAAGGAGCATG': ['bc54_nbd', 'bc54_rbk_pbc'], 
-    'TGGAAGATGAGACCCTGATCTACG': ['bc55_nbd', 'bc55_rbk_pbc'], 
-    'TCACTACTCAACAGGTGGCATGAA': ['bc56_nbd', 'bc56_rbk_pbc'], 
-    'GCTAGGTCAATCTCCTTCGGAAGT': ['bc57_nbd', 'bc57_rbk_pbc'], 
-    'CAGGTTACTCCTCCGTGAGTCTGA': ['bc58_nbd', 'bc58_rbk_pbc'], 
-    'TCAATCAAGAAGGGAAAGCAAGGT': ['bc59_nbd', 'bc59_rbk_pbc'], 
-    'CATGTTCAACCAAGGCTTCTATGG': ['bc60_nbd', 'bc60_rbk_pbc'], 
-    'AGAGGGTACTATGTGCCTCAGCAC': ['bc61_nbd', 'bc61_rbk_pbc'], 
-    'CACCCACACTTACTTCAGGACGTA': ['bc62_nbd', 'bc62_rbk_pbc'], 
-    'TTCTGAAGTTCCTGGGTCTTGAAC': ['bc63_nbd', 'bc63_rbk_pbc'], 
-    'GACAGACACCGTTCATCGACTTTC': ['bc64_nbd', 'bc64_rbk_pbc'], 
-    'TTCTCAGTCTTCCTCCAGACAAGG': ['bc65_nbd', 'bc65_rbk_pbc'], 
-    'CCGATCCTTGTGGCTTCTAACTTC': ['bc66_nbd', 'bc66_rbk_pbc'], 
-    'GTTTGTCATACTCGTGTGCTCACC': ['bc67_nbd', 'bc67_rbk_pbc'], 
-    'GAATCTAAGCAAACACGAAGGTGG': ['bc68_nbd', 'bc68_rbk_pbc'], 
-    'TACAGTCCGAGCCTCATGTGATCT': ['bc69_nbd', 'bc69_rbk_pbc'], 
-    'ACCGAGATCCTACGAATGGAGTGT': ['bc70_nbd', 'bc70_rbk_pbc'], 
-    'CCTGGGAGCATCAGGTAGTAACAG': ['bc71_nbd', 'bc71_rbk_pbc'], 
-    'TAGCTGACTGTCTTCCATACCGAC': ['bc72_nbd', 'bc72_rbk_pbc'], 
-    'AAGAAACAGGATGACAGAACCCTC': ['bc73_nbd', 'bc73_rbk_pbc'], 
-    'TACAAGCATCCCAACACTTCCACT': ['bc74_nbd', 'bc74_rbk_pbc'], 
-    'GACCATTGTGATGAACCCTGTTGT': ['bc75_nbd', 'bc75_rbk_pbc'], 
-    'ATGCTTGTTACATCAACCCTGGAC': ['bc76_nbd', 'bc76_rbk_pbc'], 
-    'CGACCTGTTTCTCAGGGATACAAC': ['bc77_nbd', 'bc77_rbk_pbc'], 
-    'AACAACCGAACCTTTGAATCAGAA': ['bc78_nbd', 'bc78_rbk_pbc'], 
-    'TCTCGGAGATAGTTCTCACTGCTG': ['bc79_nbd', 'bc79_rbk_pbc'], 
-    'CGGATGAACATAGGATAGCGATTC': ['bc80_nbd', 'bc80_rbk_pbc'], 
-    'CCTCATCTTGTGAAGTTGTTTCGG': ['bc81_nbd', 'bc81_rbk_pbc'], 
-    'ACGGTATGTCGAGTTCCAGGACTA': ['bc82_nbd', 'bc82_rbk_pbc'], 
-    'TGGCTTGATCTAGGTAAGGTCGAA': ['bc83_nbd', 'bc83_rbk_pbc'], 
-    'GTAGTGGACCTAGAACCTGTGCCA': ['bc84_nbd', 'bc84_rbk_pbc'], 
-    'AACGGAGGAGTTAGTTGGATGATC': ['bc85_nbd', 'bc85_rbk_pbc'], 
-    'AGGTGATCCCAACAAGCGTAAGTA': ['bc86_nbd', 'bc86_rbk_pbc'], 
-    'TACATGCTCCTGTTGTTAGGGAGG': ['bc87_nbd', 'bc87_rbk_pbc'], 
-    'TCTTCTACTACCGATCCGAAGCAG': ['bc88_nbd', 'bc88_rbk_pbc'], 
-    'ACAGCATCAATGTTTGGCTAGTTG': ['bc89_nbd', 'bc89_rbk_pbc'], 
-    'GATGTAGAGGGTACGGTTTGAGGC': ['bc90_nbd', 'bc90_rbk_pbc'], 
-    'GGCTCCATAGGAACTCACGCTACT': ['bc91_nbd', 'bc91_rbk_pbc'], 
-    'TTGTGAGTGGAAAGATACAGGACC': ['bc92_nbd', 'bc92_rbk_pbc'], 
-    'AGTTTCCATCACTTCAGACTTGGG': ['bc93_nbd', 'bc93_rbk_pbc'], 
-    'GATTGTCCTCAAACTGCCACCTAC': ['bc94_nbd', 'bc94_rbk_pbc'], 
-    'CCTGTCTGGAAGAAGAATGGACTT': ['bc95_nbd', 'bc95_rbk_pbc'], 
-    'CTGAACGGTCATAGAGTCCACCAT': ['bc96_nbd', 'bc96_rbk_pbc'], 
+    'GCAATACGTAACTGAACGAAGT': ['adapter_cs9_rear', 'adapter_cdna_dcs_amx_rear'], 
+    'GGCTTCTTCTTGCTCTTAGGTAGTAGGTTC': ['adapter_rna_rta_front'],  # reverse transcription adapter
+    'GAGGCGAGCGGTCAATTTTCCTAAGAGCAAGAAGAAGCC': ['adapter_rna_rta_rear'], # reverse transcription adapter
+    'ATGATGCAAGATACGCAC': ['adapter_rna_rmx_front'], # rna adapter mix
+    'GAGGCGAGCGGTCAATTTGCAATATCAGCACCAACAGAAACAACCATCGTCTATCCCTCATCATCAGAACCTACTA': ['adapter_rna_rmx_rear'],  # rna adapter mix
+    'CTTGCCTGTCGCTCTATCTTCAGAGGAG': ['adapter_cdna_pcs_rtp_front'], # reverse transcription primer
+    'TTTCTGTTGGTGCTGATATTGCTTTVVVVTTVVVVTTVVVVTTVVVVTTTGGG': ['adapter_cdna_pcs_sspii_front', 
+                                                              'adapter_cdna_dcs_ssp_front'], # strand switching primer
+    'TTTCTGTTGGTGCTGATATTGCTGGG': ['adapter_cdna_dcs_ssp_front'], # strand switching primer
+    'ATCGCCTACCGTGACAAGAAAGTTGTCGGTGTCTTTGTGACTTGCCTGTCGCTCTATCTTC': ['adapter_cdna_pcs_front'], # cDNA primer
+    'ATCGCCTACCGTGACAAGAAAGTTGTCGGTGTCTTTGTGTTTCTGTTGGTGCTGATATTGC': ['adapter_cdna_pcs_rear'], # cDNA primer
+    'CTTGCGGGCGGCGGACTCTCCTCTGAAGATAGAGCGACAGGCAAG': ['adapter_cdna_pcs_rt_front'], # reverse transcription adapter
+    'ACTTGCCTGTCGCTCTATCTTC': ['adapter_cdna_dcs_vnp_front'], 
+    'CACAAAGACACCGACAACTTTCTT': ['bc01_nbd_mlk'],  # from ligation kits nbd
+    'ACAGACGACTACAAACGGAATCGA': ['bc02_nbd_mlk'], 
+    'CCTGGTAACTGGGACACAAGACTC': ['bc03_nbd_mlk'], 
+    'TAGGGAAACACGATAGAATCCGAA': ['bc04_nbd_mlk'], 
+    'AAGGTTACACAAACCCTGGACAAG': ['bc05_nbd_mlk'], 
+    'GACTACTTTCTGCCTTTGCGAGAA': ['bc06_nbd_mlk'], 
+    'AAGGATTCATTCCCACGGTAACAC': ['bc07_nbd_mlk'], 
+    'ACGTAACTTGGTTTGTTCCCTGAA': ['bc08_nbd_mlk'], 
+    'AACCAAGACTCGCTGTGCCTAGTT': ['bc09_nbd_mlk'], 
+    'GAGAGGACAAAGGTTTCAACGCTT': ['bc10_nbd_mlk'], 
+    'TCCATTCCCTCCGATAGATGAAAC': ['bc11_nbd_mlk'], # from rapid(RBK) PCR(PBC) PCR(PBK) rapid_PCR(RPB) 16S(RAB_16S) 
+    'TCCGATTCTGCTTCTTTCTACCTG': ['bc12_nbd_mlk'], # rapid_V14(RBK) cDNA(PCB) kits
+    'AGAACGACTTCCATACTCGTGTGA': ['bc13_nbd_mlk', 'bc13_rbk_pbc_rab_16s_pcb'],
+    'AACGAGTCTCTTGGGACCCATAGA': ['bc14_nbd_mlk', 'bc14_rbk_pbc_rab_16s_pcb'], 
+    'AGGTCTACCTCGCTAACACCACTG': ['bc15_nbd_mlk', 'bc15_rbk_pbc_rab_16s_pcb'], 
+    'CGTCAACTGACAGTGGTTCGTACT': ['bc16_nbd_mlk', 'bc16_rbk_pbc_rab_16s_pcb'], 
+    'ACCCTCCAGGAAAGTACCTCTGAT': ['bc17_nbd_mlk', 'bc17_rbk_pbc_rab_16s_pcb'], 
+    'CCAAACCCAACAACCTAGATAGGC': ['bc18_nbd_mlk', 'bc18_rbk_pbc_rab_16s_pcb'], 
+    'GTTCCTCGTGCAGTGTCAAGAGAT': ['bc19_nbd_mlk', 'bc19_rbk_pbc_rab_16s_pcb'], 
+    'TTGCGTCCTGTTACGAGAACTCAT': ['bc20_nbd_mlk', 'bc20_rbk_pbc_rab_16s_pcb'], 
+    'GAGCCTCTCATTGTCCGTTCTCTA': ['bc21_nbd_mlk', 'bc21_rbk_pbc_rab_16s_pcb'], 
+    'ACCACTGCCATGTATCAAAGTACG': ['bc22_nbd_mlk', 'bc22_rbk_pbc_rab_16s_pcb'], 
+    'CTTACTACCCAGTGAACCTCCTCG': ['bc23_nbd_mlk', 'bc23_rbk_pbc_rab_16s_pcb'], 
+    'GCATAGTTCTGCATGATGGGTTAG': ['bc24_nbd_mlk', 'bc24_rbk_pbc_rab_16s_pcb'], 
+    'GTAAGTTGGGTATGCAACGCAATG': ['bc25_nbd_mlk', 'bc25_rbk_pbc'], 
+    'CATACAGCGACTACGCATTCTCAT': ['bc26_nbd_mlk', 'bc26_rbk_pbc'], 
+    'CGACGGTTAGATTCACCTCTTACA': ['bc27_nbd_mlk', 'bc27_rbk_pbc'], 
+    'TGAAACCTAAGAAGGCACCGTATC': ['bc28_nbd_mlk', 'bc28_rbk_pbc'], 
+    'CTAGACACCTTGGGTTGACAGACC': ['bc29_nbd_mlk', 'bc29_rbk_pbc'], 
+    'TCAGTGAGGATCTACTTCGACCCA': ['bc30_nbd_mlk', 'bc30_rbk_pbc'], 
+    'TGCGTACAGCAATCAGTTACATTG': ['bc31_nbd_mlk', 'bc31_rbk_pbc'], 
+    'CCAGTAGAAGTCCGACAACGTCAT': ['bc32_nbd_mlk', 'bc32_rbk_pbc'], 
+    'CAGACTTGGTACGGTTGGGTAACT': ['bc33_nbd_mlk', 'bc33_rbk_pbc'], 
+    'GGACGAAGAACTCAAGTCAAAGGC': ['bc34_nbd_mlk', 'bc34_rbk_pbc'], 
+    'CTACTTACGAAGCTGAGGGACTGC': ['bc35_nbd_mlk', 'bc35_rbk_pbc'], 
+    'ATGTCCCAGTTAGAGGAGGAAACA': ['bc36_nbd_mlk', 'bc36_rbk_pbc'], 
+    'GCTTGCGATTGATGCTTAGTATCA': ['bc37_nbd_mlk', 'bc37_rbk_pbc'], 
+    'ACCACAGGAGGACGATACAGAGAA': ['bc38_nbd_mlk', 'bc38_rbk_pbc'], 
+    'CCACAGTGTCAACTAGAGCCTCTC': ['bc39_nbd_mlk', 'bc39_rbk_pbc'], 
+    'TAGTTTGGATGACCAAGGATAGCC': ['bc40_nbd_mlk', 'bc40_rbk_pbc'], 
+    'GGAGTTCGTCCAGAGAAGTACACG': ['bc41_nbd_mlk', 'bc41_rbk_pbc'], 
+    'CTACGTGTAAGGCATACCTGCCAG': ['bc42_nbd_mlk', 'bc42_rbk_pbc'], 
+    'CTTTCGTTGTTGACTCGACGGTAG': ['bc43_nbd_mlk', 'bc43_rbk_pbc'], 
+    'AGTAGAAAGGGTTCCTTCCCACTC': ['bc44_nbd_mlk', 'bc44_rbk_pbc'], 
+    'GATCCAACAGAGATGCCTTCAGTG': ['bc45_nbd_mlk', 'bc45_rbk_pbc'], 
+    'GCTGTGTTCCACTTCATTCTCCTG': ['bc46_nbd_mlk', 'bc46_rbk_pbc'], 
+    'GTGCAACTTTCCCACAGGTAGTTC': ['bc47_nbd_mlk', 'bc47_rbk_pbc'], 
+    'CATCTGGAACGTGGTACACCTGTA': ['bc48_nbd_mlk', 'bc48_rbk_pbc'], 
+    'ACTGGTGCAGCTTTGAACATCTAG': ['bc49_nbd_mlk', 'bc49_rbk_pbc'], 
+    'ATGGACTTTGGTAACTTCCTGCGT': ['bc50_nbd_mlk', 'bc50_rbk_pbc'], 
+    'GTTGAATGAGCCTACTGGGTCCTC': ['bc51_nbd_mlk', 'bc51_rbk_pbc'], 
+    'TGAGAGACAAGATTGTTCGTGGAC': ['bc52_nbd_mlk', 'bc52_rbk_pbc'], 
+    'AGATTCAGACCGTCTCATGCAAAG': ['bc53_nbd_mlk', 'bc53_rbk_pbc'], 
+    'CAAGAGCTTTGACTAAGGAGCATG': ['bc54_nbd_mlk', 'bc54_rbk_pbc'], 
+    'TGGAAGATGAGACCCTGATCTACG': ['bc55_nbd_mlk', 'bc55_rbk_pbc'], 
+    'TCACTACTCAACAGGTGGCATGAA': ['bc56_nbd_mlk', 'bc56_rbk_pbc'], 
+    'GCTAGGTCAATCTCCTTCGGAAGT': ['bc57_nbd_mlk', 'bc57_rbk_pbc'], 
+    'CAGGTTACTCCTCCGTGAGTCTGA': ['bc58_nbd_mlk', 'bc58_rbk_pbc'], 
+    'TCAATCAAGAAGGGAAAGCAAGGT': ['bc59_nbd_mlk', 'bc59_rbk_pbc'], 
+    'CATGTTCAACCAAGGCTTCTATGG': ['bc60_nbd_mlk', 'bc60_rbk_pbc'], 
+    'AGAGGGTACTATGTGCCTCAGCAC': ['bc61_nbd_mlk', 'bc61_rbk_pbc'], 
+    'CACCCACACTTACTTCAGGACGTA': ['bc62_nbd_mlk', 'bc62_rbk_pbc'], 
+    'TTCTGAAGTTCCTGGGTCTTGAAC': ['bc63_nbd_mlk', 'bc63_rbk_pbc'], 
+    'GACAGACACCGTTCATCGACTTTC': ['bc64_nbd_mlk', 'bc64_rbk_pbc'], 
+    'TTCTCAGTCTTCCTCCAGACAAGG': ['bc65_nbd_mlk', 'bc65_rbk_pbc'], 
+    'CCGATCCTTGTGGCTTCTAACTTC': ['bc66_nbd_mlk', 'bc66_rbk_pbc'], 
+    'GTTTGTCATACTCGTGTGCTCACC': ['bc67_nbd_mlk', 'bc67_rbk_pbc'], 
+    'GAATCTAAGCAAACACGAAGGTGG': ['bc68_nbd_mlk', 'bc68_rbk_pbc'], 
+    'TACAGTCCGAGCCTCATGTGATCT': ['bc69_nbd_mlk', 'bc69_rbk_pbc'], 
+    'ACCGAGATCCTACGAATGGAGTGT': ['bc70_nbd_mlk', 'bc70_rbk_pbc'], 
+    'CCTGGGAGCATCAGGTAGTAACAG': ['bc71_nbd_mlk', 'bc71_rbk_pbc'], 
+    'TAGCTGACTGTCTTCCATACCGAC': ['bc72_nbd_mlk', 'bc72_rbk_pbc'], 
+    'AAGAAACAGGATGACAGAACCCTC': ['bc73_nbd_mlk', 'bc73_rbk_pbc'], 
+    'TACAAGCATCCCAACACTTCCACT': ['bc74_nbd_mlk', 'bc74_rbk_pbc'], 
+    'GACCATTGTGATGAACCCTGTTGT': ['bc75_nbd_mlk', 'bc75_rbk_pbc'], 
+    'ATGCTTGTTACATCAACCCTGGAC': ['bc76_nbd_mlk', 'bc76_rbk_pbc'], 
+    'CGACCTGTTTCTCAGGGATACAAC': ['bc77_nbd_mlk', 'bc77_rbk_pbc'], 
+    'AACAACCGAACCTTTGAATCAGAA': ['bc78_nbd_mlk', 'bc78_rbk_pbc'], 
+    'TCTCGGAGATAGTTCTCACTGCTG': ['bc79_nbd_mlk', 'bc79_rbk_pbc'], 
+    'CGGATGAACATAGGATAGCGATTC': ['bc80_nbd_mlk', 'bc80_rbk_pbc'], 
+    'CCTCATCTTGTGAAGTTGTTTCGG': ['bc81_nbd_mlk', 'bc81_rbk_pbc'], 
+    'ACGGTATGTCGAGTTCCAGGACTA': ['bc82_nbd_mlk', 'bc82_rbk_pbc'], 
+    'TGGCTTGATCTAGGTAAGGTCGAA': ['bc83_nbd_mlk', 'bc83_rbk_pbc'], 
+    'GTAGTGGACCTAGAACCTGTGCCA': ['bc84_nbd_mlk', 'bc84_rbk_pbc'], 
+    'AACGGAGGAGTTAGTTGGATGATC': ['bc85_nbd_mlk', 'bc85_rbk_pbc'], 
+    'AGGTGATCCCAACAAGCGTAAGTA': ['bc86_nbd_mlk', 'bc86_rbk_pbc'], 
+    'TACATGCTCCTGTTGTTAGGGAGG': ['bc87_nbd_mlk', 'bc87_rbk_pbc'], 
+    'TCTTCTACTACCGATCCGAAGCAG': ['bc88_nbd_mlk', 'bc88_rbk_pbc'], 
+    'ACAGCATCAATGTTTGGCTAGTTG': ['bc89_nbd_mlk', 'bc89_rbk_pbc'], 
+    'GATGTAGAGGGTACGGTTTGAGGC': ['bc90_nbd_mlk', 'bc90_rbk_pbc'], 
+    'GGCTCCATAGGAACTCACGCTACT': ['bc91_nbd_mlk', 'bc91_rbk_pbc'], 
+    'TTGTGAGTGGAAAGATACAGGACC': ['bc92_nbd_mlk', 'bc92_rbk_pbc'], 
+    'AGTTTCCATCACTTCAGACTTGGG': ['bc93_nbd_mlk', 'bc93_rbk_pbc'], 
+    'GATTGTCCTCAAACTGCCACCTAC': ['bc94_nbd_mlk', 'bc94_rbk_pbc'], 
+    'CCTGTCTGGAAGAAGAATGGACTT': ['bc95_nbd_mlk', 'bc95_rbk_pbc'], 
+    'CTGAACGGTCATAGAGTCCACCAT': ['bc96_nbd_mlk', 'bc96_rbk_pbc'], 
     'AAGAAAGTTGTCGGTGTCTTTGTG': ['bc01_rbk_pbc_pbk_rpb_rab_16s_pcb'], 
     'TCGATTCCGTTTGTAGTCGTCTGT': ['bc02_rbk_pbc_pbk_rpb_rab_16s_pcb'], 
     'GAGTCTTGTGTCCCAGTTACCAGG': ['bc03_rbk_pbc_pbk_rpb_rab_16s_pcb'], 
@@ -170,7 +207,7 @@ adapters = {
     'AAGCGTTGAAACCTTTGTCCTCTC': ['bc10_rbk_pbc_pbk_rpb_rab_16s_pcb'], 
     'GTTTCATCTATCGGAGGGAATGGA': ['bc11_rbk_pbc_pbk_rpb_rab_16s_pcb'], 
     'CAGGTAGAAAGAAGCAGAATCGGA': ['bc12_rbk_pbc_pbk_rab_16s_pcb'], 
-    'GTTGAGTTACAAAGCACCGATCAG': ['bc12a_rpb']}
+    'GTTGAGTTACAAAGCACCGATCAG': ['bc12_rpb']}
 
 
 #==============================================================================
@@ -226,13 +263,14 @@ def get_arguments():
         if os.path.isfile(param): # if input is file
             # check if input file ends on .fastq or .fasta
             base, ext = os.path.splitext(param)
-            if ext.lower() not in ('.fasta', '.fastq'): 
-                raise argparse.ArgumentTypeError('File extension must be .fastq or .fasta') 
+            if ext.lower() not in ('.fasta', '.fastq', '.gz'): 
+                raise argparse.ArgumentTypeError('File extension must be .fastq, .fasta or .gz') 
             paramlist.append(param)
         elif os.path.isdir(param): # if input is folder 
             with os.scandir(param) as iterator:
                 for file in iterator:
-                    if file.name.lower().endswith('.fastq') or file.name.lower().endswith('.fasta'):
+                    if file.name.lower().endswith('.fastq') or file.name.lower().endswith('.fasta')\
+                        or file.name.lower().endswith('.gz'):
                         paramlist.append(file.path)
             paramlist.sort()
             if len(paramlist) == 0:
@@ -248,36 +286,70 @@ def get_arguments():
             os.makedirs(string) # create the folder
         return string
             
-    parser = argparse.ArgumentParser(description='Umipore, a tool for demultiplexing nanopore reads' )
+    parser = argparse.ArgumentParser(description='Umipore, a tool for demultiplexing nanopore reads',
+                                     formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-i', '--input', required=True, type = valid_file,
                         help='Input folder or file in fastq or fasta format')
     parser.add_argument('-o', '--outputfolder', type=dir_path, 
-                         help='Save the results in the specified\
-                            outputfolder. Default = folder named as inputfile')
+                         help='Save the results in the specified outputfolder.\n'
+                             'Default = folder named as inputfile')
     parser.add_argument('-sf', '--sformat', choices=['auto', 'fasta', 'fastq'], default='auto',
                         help='File format to save the files.  Default = same as inputfile')  
-    parser.add_argument('-min', '--minlength', type = int, default=1,
-                        help='Minimum readlenght to process.')
+    parser.add_argument('-c', '--compressed', action = 'store_true',
+                        help='Compress output files with .gz.')
+    parser.add_argument('-min', '--minlength', type = int, default=50,
+                        help='Minimum readlenght to process. Default = 50')
     parser.add_argument('-max', '--maxlength', type = int, 
                         help='Maximum readlenght to process.  Default = No limit')
     parser.add_argument('-np', '--nprocesses', type = int, default=4,
                         help='Number of processors to use. Default = 4')  
     parser.add_argument('-sk', '--seq_kit', type = lambda s : s.lower(), 
-                        choices = ['lsk', 'lsk109', 'lsk110', 'lsk114'],
-                        help='Sequencing kit used in experiment.')
+                        choices = ['lsk', 'lsk109', 'lsk110', 'lsk114', 'cas9', 'rna', 'cdna',
+                                   'nbd', 'mlk', 'cs9', 'rad', 'rbk', 'ulk', 'lrk', 'psk', 'pbk',
+                                   'rpb', '16s', 'rab', 'pcs', 'dcs', 'pcb'],
+                        help='Sequencing kit used in experiment.\n'
+                            'Available kits from Nanopore:\n'
+                            'LIGATION KITS\n'
+                            '  lsk: ligation sequencing kit (lsk109, lsk110, lsk114)\n'
+                            '  nbd: native barcoding kit\n'
+                            '  mlk: multiplex ligation kit\n'
+                            '  cs9: Cas9 sequencing kit             Discontinued\n'
+                            'RAPID KITS\n'
+                            '  rad: rapid sequencing kit\n'
+                            '  rbk: rapid barcoding kit\n'
+                            '  ulk: ultra long DNA sequencing kit\n'
+                            '  lrk: Field sequencing kit            Discontinued\n'
+                            '  psk: PCR sequencing kit              Discontinued\n'
+                            '  pbk: PCR barcoding kit               Discontinued\n'
+                            '  rpb: rapid PCR barcoding kit\n'
+                            '  16s: 16s barcoding kit\n'
+                            '  rab: 16s rapid barcoding kit         Discontinued\n'
+                            'RNA - cDNA KITS\n'
+                            '  rna: direct RNA sequencing kit\n'
+                            '  pcs: cDNA PCR sequencing kit\n'
+                            '  dcs: direct cDNA sequencing kit      Discontinued\n'
+                            '  pcb: cDNA PCR barcoding kit')
     parser.add_argument('-ca', '--custom_adapters', type = str, 
-                        help='File with adapters from other sequencing technologies '\
+                        help='File with adapters from other sequencing technologies\n'
                             'in case your data is not from Nanopore Sequencing')
     parser.add_argument('-ns', '--no_split', action = 'store_false', default=True,
                         help='Split the reads on middle adapter. Default = True')  
 
     # barcodes   
-    parser.add_argument('-bck', '--bc_kit', type = lambda s : s.lower(), 
-                        choices = ['nbd', 'rbk', 'pbc', 'pbk', 'rpb', 'rab', '16s', 'pcb'],
-                        action='append', help='Barcode kit(s) used in experiment.')
-    parser.add_argument('-bckn', '--bc_kit_numbers', type = int, nargs='+', 
-                        action = 'append', help='Barcode numbers from the kit used in experiment'\
-                            'Default = all 96')
+    parser.add_argument('-d', '--dual', nargs=2, type = lambda s : s.lower(), 
+                        choices = ['nbd', 'pbc', 'custom'], 
+                        help='Dual barcodes are used.\n'
+                            'Only 2 possible combinations: with the nbd and pbc kit,\n'
+                            'or with the nbd kit and custom barcodes'   )  
+    # parser.add_argument('-bck', '--bc_kit', type = lambda s : s.lower(), 
+    #                     choices = ['nbd', 'mlk', 'pbc', 'rbk',  'pbk', 'rpb', '16s', 'rab', 'pcb'],
+    #                     action='append', help='Barcode kit(s) used in experiment.')
+    parser.add_argument('-bcn', '--bc_numbers', nargs='+', # action = 'append', 
+                        help='Barcode (kit and) numbers used in experiment.\n'
+                            'Default = all.\n'
+                            'For custom barcodes, it is not using the barcode numbers in\n'
+                            'the name but the line numbers in your input file.') 
+                        # here possibility to give just numbers, or first kit and than numbers 
                         # nargs='+': multiple args allowed; action='append': multiple times same arg allowed
                         # args are added in nested list
     parser.add_argument('-bcc', '--bc_custom', type = str, 
@@ -289,11 +361,11 @@ def get_arguments():
     parser.add_argument('-bc_os', '--bc_one_side', action = 'store_true', default=False,
                         help='Search for barcode on one sides.  Default = False')  
     parser.add_argument('-sp', '--search_part', type = int, default=150,
-                        help='Part at begin and end of sequence to search for adapters or barcodes. '\
-                            'Default = 150 bp longer than the adapter or barcode')
+                        help='Part at begin and end of sequence to search for adapters or \n'
+                            'barcodes. Default = 150 bp longer than the adapter or barcode')
     parser.add_argument('-er', '--error', type = range_limited_float_type,
-                        default=0.15, help='Percentage error allowed in editdistance for\
-                            adapters and barcodes. Default = 0.15 (15 percent)')
+                        default=0.15, help='Percentage error allowed in editdistance for\n'
+                            'adapters and barcodes. Default = 0.15 (15 percent)')
     # UMIs
     parser.add_argument('-u', '--umi', type = str, 
                         help='File with UMIs used in experiment.')
@@ -493,7 +565,7 @@ def create_middle_bc_list(used_bc_list):
         except IndexError:
             pass
         middle_bc_list.append([[[' ', 'middle_' + str(i)]], ''.join(middle_seq)])
-    middle_front_bc, middle_rear_bc = create_search_list(middle_bc_list)
+    middle_front_bc, middle_rear_bc = create_search_list(middle_bc_list, '_')
     return middle_front_bc, middle_rear_bc
 #==============================================================================
 def filter_locations(locations):
@@ -729,13 +801,87 @@ def remove_front_end_adapters(readlist, front_adap, rear_adap, error, search_par
 #============================================================================== 
 # -------------- BARCODES PART ----------------
 #==============================================================================
-def read_barcodes(adapters, bc_kit, bc_kit_numbers):
+def prep_bc_numbers(bc_numbers, len_bclist):
+    '''
+    check the given barcode numbers and BC kit, if none given, use all 96; 
+    if ranges are given, fill the range.
+    '''
+    bc_numbers2 = []
+    if bc_numbers is not None: # if name or numbers are given
+        if type(bc_numbers[0]) is not list: # if it is a nested list, the numbers are already prepared
+            sublist = []
+            for i, x in enumerate(bc_numbers):
+                try: # check if it is a number
+                    x = int(x)
+                    if sublist[0] == 'custom': # not looking for number but for line number in file
+                        '''
+                        line    F  -  R
+                        line1   1  -  2
+                        line2   3  -  4
+                        line3   5  -  6
+                        line4   7  -  8
+                        line5   9  - 10
+                        line6   11 - 12
+                        '''
+                        if x < 0: # if there are negative numbers
+                            e = abs(int(bc_numbers[i]))*2  # end number
+                            b = int(bc_numbers[i-1])*2 -1 # begin number
+                            for y in range(b+1, e+1): # fill range
+                                sublist.append(y)
+                        else:
+                            sublist.append(int(x)*2 -1)  
+                            sublist.append(int(x)*2)  
+                    else: # normal barcodes: looking for the number
+                        if x < 0: # if there are negative numbers
+                            e = abs(int(bc_numbers[i])) # end number
+                            b = int(bc_numbers[i-1]) # begin number
+                            for y in range(b+1, e+1): # fill range
+                                sublist.append(y)
+                        else:
+                            sublist.append(int(x))      
+                except ValueError: # it is text
+                    if x in ['nbd', 'mlk', 'pbc', 'rbk', 'pbk', 'rpb', '16s', 'rab', 'pcb', 'custom']: # it is the BC kit name
+                        if len(sublist) > 0:
+                            bc_numbers2.append(sublist)
+                            sublist = []
+                        sublist.append(x)
+                    else:
+                        print(str(x) + ' is not a correct value or possible barcode kit.')
+                        print('Examples: nbd, mlk, pbc, rbk, pbk, rpb, 16s, rab, pcb, custom')
+                        print('Examples: 1 -15 17 18 19 -23')
+                        sys.exit()      
+            bc_numbers2.append(sublist)
+            bc_numbers = bc_numbers2   
+
+        for sl in bc_numbers: # sublist in list
+            # print(sl)
+            if not type(sl[0]) is str: # if it is not the BC kit name but a number
+                if bc_kit in ['nbd', 'mlk', 'pbc', 'rbk', 'pbk', 'rpb', '16s', 'rab', 'pcb']: # it is the BC kit name
+                    sl.insert(0, bc_kit) # insert name
+                elif bool(bc_custom) is True:
+                    sl.insert(0, 'custom') # insert name
+                else: # hier nog kijken voor die pbc of custom kit
+                    print('Missing a possible barcode kit.')
+                    print('Examples: nbd, mlk, pbc, rbk, pbk, rpb, 16s, rab, pcb, custom')
+                    sys.exit()    
+            if not type(sl[-1]) is int: # if the last item is not a number, use the complete list
+                if sl[0] in ['rpb', '16s', 'pcb', 'rab']:
+                    sl.extend(x for x in range(1,25))
+                if sl[0] in ['custom']:
+                    if len_bclist != '_':
+                        sl.extend(x for x in range(1, int(len_bclist/2) + 1))
+                else:
+                    sl.extend(x for x in range(1,97))
+
+    return bc_numbers
+#==============================================================================
+def read_barcodes(adapters, bc_kit, bc_numbers):
     '''
     Read the barcodes that are used in the experiment.  Depending on the kit, barcodes 
     can be different and can have a other flanking regions (see chemistry technical document 
     on Nanopore website). If 2 kits are used (PBC and NBD) to make dual barcoded
-    samples, they are concatenated in this part. (PBC is fased out, so this option is not
-    possible with other kits).
+    samples, they are concatenated in this part. 
+    Users can enter BC kit name and numbers, or just the numbers if only one kit is used.
     If there is no F or R => use 'f' in "front_bc" and compl-rev as "rear_bc"
     If there is F and R => use 'f' and 'r' in "front_bc" and compl-rev of 'f' and 'r' in "rear_bc"
     
@@ -749,59 +895,46 @@ def read_barcodes(adapters, bc_kit, bc_kit_numbers):
       F2->  AAA  F->  XXX            yyy ->crR aaa-> crF2 
     crF2 <- aaa crF<- xxx            YYY <-R   AAA<- F2
     '''     
-    # check the given barcode numbers, if none given, use all 96; if ranges are given, fill the range.
-    bc_kit_numbers2 = []
-    if bc_kit_numbers is not None: # if numbers are given
-        for nl in bc_kit_numbers: # for nested list in bc_kit_numbers
-            sublist = []
-            for i, x in enumerate(nl): 
-                if x < 0: # if there are negative numbers
-                    e = abs(nl[i]) # end number
-                    b = nl[i-1] # begin number
-                    for y in range(b+1, e+1): # fill range
-                        sublist.append(y)
-                else:
-                    sublist.append(x)
-            bc_kit_numbers2.append(sublist)
-        bc_kit_numbers = bc_kit_numbers2       
-    else:
-        bc_kit_numbers = [[x for x in range(1,97)]] # use the complete list
-        
-    if len(bc_kit) > 1: # check if dual barcodes are used, for both, bc numbers are needed
-        if len(bc_kit_numbers) != len(bc_kit) and type(bc_kit_numbers[0]) is list:
-            print('\nThe barcode numbers are not provided for each barcode kit.')
-            for x, y in zip_longest(bc_kit, bc_kit_numbers):
-                print('barcode kit ' + x + ': ' + str(y))
-            sys.exit('\nPlease give the used barcode numbers for both kits. (-bckn --bc_kit_numbers)')
-        elif type(bc_kit_numbers[0]) is not list:
-            print('\nNo barcode numbers for the barcode kits are provided.')
-            for x in bc_kit:
-                print('barcode kit ' + x + ': None')
-            sys.exit('\nPlease give the used barcode numbers for both kits. (-bckn --bc_kit_numbers)')
+    bc_numbers = prep_bc_numbers(bc_numbers, '_')
+    
+    # if bool(dual) is True: # check if dual barcodes are used, for both, bc numbers are needed
+    #     if len(bc_numbers) != len(bc_kit) and type(bc_numbers[0]) is list:
+    #         print('\nThe barcode numbers are not provided for each barcode kit.')
+    #         for x, y in zip_longest(bc_kit, bc_numbers):
+    #             print('barcode kit ' + x + ': ' + str(y))
+    #         sys.exit('\nPlease give the used barcode numbers for both kits. (-bcn --bc_numbers)')
+    #     elif type(bc_numbers[0]) is not list:
+    #         print('\nNo barcode numbers for the barcode kits are provided.')
+    #         for x in bc_kit:
+    #             print('barcode kit ' + x + ': None')
+    #         sys.exit('\nPlease give the used barcode numbers for both kits. (-bcn --bc_numbers)')
 
     # make list with 5'-3' barcodes
     used_bc_list = []
-    bc_kit_numbers = [[str(x).zfill(2) for x in sublist] for sublist in bc_kit_numbers] # change 1 to 01, ...
-    for i, m in enumerate(bc_kit): # if multiple kits are used sequentially
+
+    bc_numbers = [[str(x).zfill(2) for x in sublist] for sublist in bc_numbers] # change 1 to 01, ...
+    bc_numbers = sorted(bc_numbers) # make sure the list starts with nbd
+
+    for i, m in enumerate(bc_numbers): # if multiple kits are used sequentially
         r_flank = None
         used_bc_list2 = []
         for ke in adapters:
             for n in adapters[ke]:
                 # find flanking regions
-                if n.lower().find(m) != -1 and n.lower().find('flank') != -1 \
+                if n.lower().find(m[0]) != -1 and n.lower().find('flank') != -1 \
                     and n.lower().find('forward') != -1 :
                     f_flank = ke
-                elif n.lower().find(m) != -1 and n.lower().find('flank') != -1 \
+                elif n.lower().find(m[0]) != -1 and n.lower().find('flank') != -1 \
                     and n.lower().find('reverse') != -1 :
                     r_flank = ke
-                elif n.lower().find(m) != -1 and n.lower().find('flank') != -1:
+                elif n.lower().find(m[0]) != -1 and n.lower().find('flank') != -1:
                     f_flank = ke # if forw and rev are the same
         # make barcodes with flanking regions
-        for num in bc_kit_numbers[i]: # first bc_kit -> first sublist in bc_kit_numbers 
+        for num in bc_numbers[i]: # first bc_kit -> first sublist in bc_numbers 
             for ke in adapters:
                 for n in adapters[ke]:
-                    if n.lower().find(m) != -1 and n.lower().find('bc' + str(num)) != -1: # find barcodes
-                        name = 'BC' + num + '_' + m.upper()
+                    if n.lower().find(m[0]) != -1 and n.lower().find('bc' + str(num)) != -1: # find barcodes
+                        name = 'BC' + num + '_' + m[0].upper()
                         name2 = ['f', name] # put indication 'front' in name 
                         k = f_flank.replace('---BC---', ke)
                         used_bc_list2.append([[name2], k])
@@ -809,78 +942,77 @@ def read_barcodes(adapters, bc_kit, bc_kit_numbers):
                             k = r_flank.replace('---BC---', ke)
                             name2 = ['r', name] # put indication 'rear' in name
                             used_bc_list2.append([[name2], k])
-                                
-        if len(used_bc_list) == 0: # fist kit  
-            used_bc_list = used_bc_list2[:]
-        else: # dual barcodes
-            used_bc_list = combine_barcodes(used_bc_list, used_bc_list2)
+        used_bc_list.append(used_bc_list2)
+    # print(used_bc_list)
+    # sys.exit()   
+    # print(used_bc_list)
+    used_bc_list = [x for x in used_bc_list if x != []]
+    if len(used_bc_list) == 2: # dual barcodes from nanopore 
+        # print(used_bc_list)
+        used_bc_list = combine_barcodes(used_bc_list[0], used_bc_list[1])
+    else:
+        used_bc_list = used_bc_list[0] # it is a nested list with one sublist, unnest it
    
     # for x in used_bc_list:
     #     print(x)
     # sys.exit()
     return used_bc_list
 #==============================================================================    
-def read_custom_barcodes(file):
+def read_custom_barcodes(file, bc_numbers): #hier nog mogelijk maken om bc_numbers te geven
     ''' 
     Read the file with custom barcodes and put them in list.  If "forward" and "reverse" 
     is used in the name, it means they are different, otherwise they are the same.
     '''
     try:
-        with open(os.path.join(infolder, file), 'r') as inf: # check the fileformat
-            line = inf.readline()
-            if line[0] == '>':
-                fileformat = 'fasta'
-            else:
-                fileformat = 'csv'
         used_bc_list = []
-        if fileformat == 'fasta':
-            with open(os.path.join(infolder, file), 'r') as adap:
-                for record in SeqIO.parse(adap, "fasta"):
-                    if not record.id.startswith('#'): # comments in adapter file
-                        name = record.id.lower()
-                        bc = str(record.seq).upper() 
-                        if name.find('forward') != -1: # forward barcode
-                            name = ['f', name.replace('_forward', '').upper()]
-                            used_bc_list.append([[name], bc])
-                        elif name.find('reverse') != -1: # reverse barcode
-                            name = ['r', name.replace('_reverse', '').upper()]
-                            used_bc_list.append([[name], bc])
-                        else: # if there is no forw or reverse in name
-                            name = ['f', name.upper()]    
-                            used_bc_list.append([[name], bc])
-        else:
-            with open(os.path.join(infolder, file), newline='') as csvfile:
-                dialect = csv.Sniffer().sniff(csvfile.read()) # ckeck if comma or tab separated
-                csvfile.seek(0) # got back to begin of file
-                reader = csv.reader(csvfile, dialect)
-                for row in reader:
-                    if any(x.strip() for x in row): # remove empty lines
-                        if not row[0].startswith('#'): # comment in line
-                            name = ['f', row[0]]
-                            fbc = row[1].strip().replace(' ','').upper()
-                            used_bc_list.append([[name], fbc])
-                            name = ['r', row[0]]
-                            rbc = row[2].strip().replace(' ', '').upper()
-                            used_bc_list.append([[name], rbc])
+        with open(os.path.join(infolder, file), newline='') as csvfile:
+            dialect = csv.Sniffer().sniff(csvfile.read()) # ckeck if comma or tab separated
+            csvfile.seek(0) # got back to begin of file
+            reader = csv.reader(csvfile, dialect)
+            for row in reader:
+                if any(x.strip() for x in row): # remove empty lines
+                    if not row[0].startswith('#'): # comment in line
+                        name = ['f', row[0]]
+                        fbc = row[1].strip().replace(' ','').upper()
+                        used_bc_list.append([[name], fbc])
+                        name = ['r', row[0]]
+                        rbc = row[2].strip().replace(' ', '').upper()
+                        used_bc_list.append([[name], rbc])
     except FileNotFoundError:
         print('Can not find custom barcode file ' + file)
         sys.exit()
-    return used_bc_list
+
+    bc_numbers = prep_bc_numbers(bc_numbers, len(used_bc_list))  
+    
+    # with the custom barcodes it is using the line numbers to indicate what barcodes to use
+    for sublist in bc_numbers:
+        if sublist[0] == 'custom':
+            used_bc_list2 = []
+            numb = sorted(list(set(sublist[1:]))) # take only the numbers
+            for num in numb: # it is the line number
+                n = num -1
+                used_bc_list2.append(used_bc_list[n])
+    used_bc_list = used_bc_list2
+    
+    return used_bc_list, bc_numbers
 #==============================================================================
 def combine_barcodes(used_bc_list1, used_bc_list2):
     '''
     If custom (PCR) and kit barcodes (ligation) are combined the sequences of both are
-    concateneted here.  "f" and "r" are used to indicate if there are front and rear, or 
+    concatenated here.  "f" and "r" are used to indicate if there are front and rear, or 
     forward and reverse sequences that are different.  If only "f" is used, it means that 
     the rear (reverse) sequence is the same.  "f" and "r" is only important to combine barcodes
     if they have different flanking regions.
     order is 5' - used_bc_list1 - used_bc_list2 - gene - 3'
     '''
+    # for x in used_bc_list1:
+    #     print(x)
+
     used1 = set([tuple(x[0] for x in name) for name, seq in used_bc_list1]) # check if f and r are present
     used2 = set([tuple(x[0] for x in name) for name, seq in used_bc_list2]) # check if f and r are present
     
     used_bc_list3 = []
-    
+    # print(used_bc_list1)
     if len(used1) == 2 and len(used2) == 2: # if f en r are present in both
         for na, seq in used_bc_list2:
             for name, sequ in used_bc_list1: 
@@ -922,7 +1054,7 @@ def combine_barcodes(used_bc_list1, used_bc_list2):
     # sys.exit()
     return used_bc_list3
 #==============================================================================
-def create_search_list(used_bc_list):
+def create_search_list(used_bc_list, bc_kit):
     '''
     All bc (also merged ones) are 5'-3' direction.  Clean the name for proper file output
     and make 2 lists used for search: 
@@ -930,9 +1062,9 @@ def create_search_list(used_bc_list):
     rear_bc is for the complement reverse barcodes on the 3' side of the read.
     Nested lists: [[name, F_bc, R_bc],...]  [[name, F_cr_bc, R_cr_bc],...]
     '''
-    bc_kit = args.bc_kit
-    if bc_kit is None:
-        bc_kit = []
+    bc_kit = ['nbd', 'mlk', 'rbk', 'pbk', 'rpb', '16s', 'rab', 'pcb', 'pbc']
+    # if bc_kit is None:
+    #     bc_kit = []
     #------------------------
     def remove_kit(name): # remove kit name from total name and remove 'f' and 'r'
         name2 = []
@@ -1920,7 +2052,14 @@ def queue(infile):
     max_length = args.maxlength
     nprocesses = args.nprocesses
     sformat = args.sformat.lower()
-    with open(os.path.join(infolder,infile), 'r') as inf: # check the fileformat
+    
+    # check if it is a gzip file or not, changes the open function
+    if infile.endswith('.gz'):
+        open_func = gzip.open
+    else:  # fasta or fastq
+        open_func = open
+          
+    with open_func(os.path.join(infolder,infile), 'rt') as inf: # check the fileformat
         line = inf.readline()
         if line[0] == '>':
             fileformat = 'fasta'
@@ -1930,7 +2069,7 @@ def queue(infile):
         args.sformat = fileformat
     readlist = []
     # file =  'sample_Flo1_BC101.fastq' #"sample_Flo1_BC101.fastq"   #'sample_unk.fastq'
-    handle = open(infile, "r") 
+    handle = open_func(os.path.join(infolder,infile), "rt") 
     for record in SeqIO.parse(handle, fileformat):
         record = record.upper() # make all sequences uppercase
         with file_count.get_lock():
@@ -1983,7 +2122,7 @@ def process_queue():
                 elif bool(umi_os) is True:
                     find_available_umis_os(readlist, front_bc, error, search_part)
             else: # save the trimmed reads
-                name = os.path.join(outputfolder, infile.replace('.fastq', '_trim').replace('.fasta', '_trim'))
+                name = os.path.join(outputfolder, infile.replace('.gz', '').replace('.fastq', '_trim').replace('.fasta', '_trim'))
                 for record in readlist:
                     save_results(record, name)
                 
@@ -2121,12 +2260,20 @@ def save_results(record, name):
     '''
     save the results in separate files
     '''
+    compressed = args.compressed
+    if compressed is True: # output files compressed or not
+        open_func = gzip.open
+    else:  # fasta or fastq
+        open_func = open
+        
     sformat = args.sformat.lower()
     if sformat == 'fastq':
         name = name + '.fastq'
     else:
         name = name + '.fasta'
-    with open(name, 'a') as writer: 
+    if compressed is True:
+        name = name + '.gz'
+    with open_func(name, 'at') as writer: 
         try:
             SeqIO.write(record, writer, sformat)
         except ValueError: # can not save fastq from fasta file
@@ -2142,15 +2289,76 @@ if __name__ == '__main__':
         seq_kit = args.seq_kit # sequencing kit used
         custom_adap = args.custom_adapters
         init_sformat = args.sformat.lower() # format to save file
-        bc_kit_numbers = args.bc_kit_numbers
+        bc_numbers = args.bc_numbers
         stopper = Event() # initialize event to signal stop
         todoqueue = Queue(maxsize = 2)#nprocesses + 1) # max number in queue
         resultqueue = Queue() # queue to store number of reads in BC_files
         umiqueue = Queue() # queue to store the possible umis
-        
-        
-        bc_kit = args.bc_kit
         bc_custom = args.bc_custom
+        dual = args.dual
+        
+        # catch incomplete info from users
+        if seq_kit == 'nbd' and bool(bc_custom) is True: # check if seq kit is a BC kit and custom is used
+            if dual is None:
+                print('ERROR:')
+                print('Seems you are using dual barcodes: "nbd and custom"')
+                print('Please use the "-d or --dual" option for that.')
+                sys.exit()
+                
+        elif seq_kit in ['nbd', 'mlk', 'rbk', 'pbk', 'rpb', '16s', 'rab', 'pcb']: # check if seq kit is a BC kit 
+            bc_kit = seq_kit
+        
+        if bool(dual) is True: # dual barcodes are used
+            bc_kit = seq_kit
+            if all(x in ['nbd', 'pbc'] for x in dual): # check if both are present
+                bc_kit = dual
+            if 'custom' in dual and bool(bc_custom) is False:
+                print('ERROR:')
+                print('You did not mention the custom BC file with the "-bcc" option')
+                sys.exit()
+            if bc_numbers is not None: # if name of numbers are given
+                if not any(x in ['custom', 'nbd', 'pbc'] for x in bc_numbers): # check if one is mentioned
+                    print('ERROR:')
+                    print('It is not clear for which kit the barcode numbers are used.')
+                    sys.exit()
+                if 'nbd' not in bc_numbers:
+                    bc_numbers.append('nbd')
+                if 'custom' in bc_numbers and bool(bc_custom) is False:
+                    print('ERROR:')
+                    print('You did not mention the custom BC file with the "-bcc" option')
+                    sys.exit()
+            else:
+                bc_numbers = dual
+
+        # if seq_kit in ['nbd', 'mlk', 'rbk', 'pbk', 'rpb', '16s', 'rab', 'pcb']: # check if seq kit is a BC kit 
+        #     bc_kit = seq_kit.split()
+        #     if bc_numbers is None: # if no name or numbers are given
+        #         bc_numbers = []
+        #         bc_numbers.append(seq_kit) # use the name of the BC kit in a list
+        #         if bool(bc_custom) is True:
+        #             bc_numbers.append('custom')
+        #     else: # name or numbers are given
+        #         if bool(bc_custom) is True: # 2 BC kits used
+        #             if not 'custom' and 'nbd' in bc_numbers:
+        #                 print('')
+        
+        # wanneer is bc_numbers nodig ?  als er 2 bc kits samen gebruikt zijn met :
+        #     nbd en pbc
+        #     nbd en custom
+        # anders is er telkens maar 1 mogelijkheid van naam en aantal BC
+        
+           
+        # else: # the seq kit is not a BC kit
+        #     if bc_numbers is not None and bool(bc_custom) is False: # if name or numbers are given but no custom BC
+        #         bc_kit = ['pbc'] # PCR barcoding expansion kit is the only non-sequencing BC kit
+        #     if bool(bc_custom) is True:
+        #         bc_numbers = ['custom']
+        #         bc_kit = False # no nanopore BC kit used
+        #     else:
+        #         bc_kit = False
+        # print(bc_kit)
+        # print(bool(bc_kit))
+        
         bc_os = args.bc_one_side
         bc_bs = args.bc_both_sides
         umi = args.umi
@@ -2167,7 +2375,7 @@ if __name__ == '__main__':
              
         for infolder_file in infolder_file_list:
             infolder, infile = os.path.split(os.path.realpath(infolder_file))
-            outfolder, ext = os.path.splitext(infile)
+            outfolder, ext = os.path.splitext(infile.replace('.gz', ''))
             if not outputfolder: # if outputfolder is not given
                 try:
                     args.outputfolder = os.path.join(infolder, outfolder)
@@ -2179,12 +2387,12 @@ if __name__ == '__main__':
            adapters, front_adap, rear_adap, middle_adap, middle_front_bc, middle_rear_bc = read_custom_adap(custom_adap)
         # --------- BARCODE PART -----------------
         if bool(bc_kit) is True and bool(bc_custom) is False: # if a barcode kit is given
-            used_bc = read_barcodes(adapters, bc_kit, bc_kit_numbers)
+            used_bc = read_barcodes(adapters, bc_kit, bc_numbers)
         if bool(bc_custom) is True and bool(bc_kit) is False: # if a custom barcode file is given
-            used_bc = read_custom_barcodes(bc_custom)
+            used_bc, bc_numbers = read_custom_barcodes(bc_custom, bc_numbers)
         if bool(bc_kit) is True and bool(bc_custom) is True: # if kit and custom is given
-            used_bc = read_barcodes(adapters, bc_kit, bc_kit_numbers)
-            used_custom_bc = read_custom_barcodes(bc_custom)
+            used_custom_bc, bc_numbers = read_custom_barcodes(bc_custom, bc_numbers)
+            used_bc = read_barcodes(adapters, bc_kit, bc_numbers)
             used_bc = combine_barcodes(used_bc, used_custom_bc)
             
         # -----------UMI PART --------------------
@@ -2195,7 +2403,7 @@ if __name__ == '__main__':
         """
         if bool(bc_kit) is True or bool(bc_custom) is True or bool(umi) is True: # if barcodes are used, make list to search front and rear of a read
             middle_front_bc, middle_rear_bc = create_middle_bc_list(used_bc) # if BC are used, create list with middle adapters
-            front_bc, rear_bc = create_search_list(used_bc)
+            front_bc, rear_bc = create_search_list(used_bc, bc_kit)
         
 
         # if bool(umi) is True:
@@ -2253,3 +2461,38 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         sys.exit()
 
+"""
+te doen:
+- adapters in de file zelf zetten, in goed leesbare lijst -> OK
+- barcodes vergelijken tussen de verschillende kits en ook in een goede lijst zetten -> OK in lijst van adapters
+- testen om zelf middel barcodes te zoeken uit lijst > OK
+- is de middle adapter ook als F en R te vinden ? -> enkel als F -> OK
+- chemistry guide nakijken, -> OK
+- zorgen dat andere adapters ook kunnen geladen worden -> OK
+- automatisch laten zoeken naar adapters en barcodes met random functie om ook reads op einde file te lezen -> niet zo interessant
+  door overlap van BC en adapters tussen verschillende kits en dual barcodes
+- NBD barcode flanking region nakijken -> OK (is identiek aan Complement reverse)
+- alle adapters en benamingen van kits nakijken en controleren -> OK
+- argparse deftig uitlijnen -> OK
+- mogelijkheid om gz files te lezen en schrijven -> OK
+- testen of split on middle ook de primers aan de rand afknipt
+- moeten andere adapters ook als middle beschouwd worden ? cas9: idem als lsk; RNA: nakijken bij info kits front en rear adapters 
+cDNA PCR sequencing kit   (contains UMI ???)
+- nog RNA data zoeken om te testen
+- save arguments aanpassen
+
+-nbd: native barcoding kit: als je die selecteerd, moet je geen bc kit meer opgeven, het moet automatisch weten welke bc 
+type gebruikt is.
+
+dual barcoding is mogelijk met de pbc gevolgd door nbd (lsk ??) kit.  of met eigen pcr en dan nbd.
+
+UMI:
+- gz support voorzien
+gecheckt voor nbd en pbc -> ok
+
+python3 umipore_2025-06-04.py -i Unknown.fasta -sk nbd -d custom nbd -bcc custom.csv -bcn custom 1 4 -6 nbd 3 -6
+python3 umipore_2025-06-04.py -i Unknown.fasta -sk nbd -d pbc nbd -bcn pbc 1 -6 nbd 3 -6
+
+testen voor alle andere kits
+
+"""

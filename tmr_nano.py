@@ -1,68 +1,111 @@
 #!/usr/bin/env python3
 
-
 import sys
 import os
-import subprocess
+import re
 import argparse
 import subprocess
-import re
-from tqdm import tqdm  # Import tqdm
-from datetime import datetime  # Import datetime for current time and date
+from tqdm import tqdm
+from datetime import datetime
 
 # Argument parser
 parser = argparse.ArgumentParser(description="Cluster OTUs and assign taxonomy using USEARCH and VSEARCH.")
-parser.add_argument("-db","--db_path", help="Path to the database file")
+parser.add_argument("-db", "--db_path", help="Path to the database file")
 parser.add_argument("-t", "--threads", type=int, default=8, help="Number of threads (default: 8)")
 
 args = parser.parse_args()
 db_path = args.db_path
-j = args.threads  # Number of threads
+j = args.threads
 
-# Get the current date and time
+# Get current time
 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 print(f"Current date and time: {current_time}")
 
+# Copy and rename consensus sequence files
 os.system(r"""find . -name "*_consensussequences.fasta" -exec cp "{}" . \;""")
-os.system("""rename -f 's/_consensussequences//' *fasta""")
+for filename in os.listdir():
+    if filename.endswith(".fasta"):
+        new_name = re.sub(r"_consensussequences", "", filename)
+        if new_name != filename:
+            os.rename(filename, new_name)
 
+# Modify fasta headers
 counter = 0
+os.system('clear')
 
-# Process each .fasta file in the current directory
 for file_name in os.listdir('.'):
     if file_name.endswith('.fasta'):
-        SampleName = file_name.replace('.fasta', '')  # Extract SampleName from filename
-        
+        SampleName = file_name.replace('.fasta', '')
         with open(file_name, 'r') as input_file:
-            lines = input_file.readlines()  # Read all lines in the file
-        
-        with open(file_name, 'w') as output_file:  # Open the same file for writing
+            lines = input_file.readlines()
+
+        with open(file_name, 'w') as output_file:
             for line in lines:
                 if line.startswith('>'):
-                    # Use regex to match and replace the header format
                     line = re.sub(rf'>consensus_{SampleName}_[0-9_]+\((\d+)\)', 
                                   rf'>{SampleName}._{counter};size=\1', line)
-                    counter += 1  # Increment counter for each new header
-                # Write the modified line to the same file
+                    counter += 1
                 output_file.write(line)
 
+# Dereplication
+os.system("""for file in *.fasta; do SampleName=`basename $file .fasta`; vsearch -sortbysize "$SampleName".fasta --output "$SampleName".sorted.fasta -minsize 2; done""")
 
-
-###Dereplicating data - picking representative sequences:
-os.system("""for file in *.fasta; do     SampleName=`basename $file .fasta`;     vsearch -sortbysize "$SampleName".fasta --output "$SampleName".sorted.fasta -minsize 2; done""")
-
+# Denoising
 print("Denoising..................... ", end="")
-
-###Denoising:
-
 os.system("""for file in *sorted.fasta; do SampleName=`basename $file .sorted.fasta`; usearch -unoise3 "$SampleName".sorted.fasta -zotus "$SampleName".zotus.fasta -tabbedout "$SampleName".denoising.summary.txt -minsize 1; done""")
 os.system("mkdir sorted && mv *sorted.fasta sorted/")
 os.system("mkdir denoising_summary && mv *denoising.summary.txt denoising_summary/")
 
+# OTU Table
 os.system(f"""for file in *zotus.fasta; do SampleName=`basename $file .zotus.fasta`; usearch -otutab "$SampleName".fasta -zotus "$SampleName".zotus.fasta -otutabout "$SampleName"_zotu_table.txt -threads 20; done""")
 
-###Adding sequence to zOTU_table with add_seq_to_zotu.py:
-os.system("""for file in *zotus.fasta; do     SampleName=`basename $file .zotus.fasta`; add_seq_to_zotu.py "$SampleName"_zotu_table.txt "$SampleName".zotus.fasta "$SampleName"_zotu_table_with_seq.txt; done""")
+# === Native Python version of add_seq_to_zotu ===
+
+def add_seq_to_zotu(zotu_counts, zotu_fasta, output):
+    zOTU_list = []
+    zOTU_dict = {}
+
+    with open(zotu_counts, 'r') as counts:
+        for line in counts:
+            if line.startswith("#"):
+                COUNT_headings = line.strip().split()[2:]
+            else:
+                parts = line.strip().split()
+                zOTU_list.append(parts[0])
+                zOTU_dict[parts[0]] = [parts[1:]]
+
+    with open(zotu_fasta, 'r') as fasta:
+        sequence = ''
+        heading = fasta.readline().strip().strip(">")
+
+        for line in fasta:
+            if line.startswith(">"):
+                if heading not in zOTU_list and heading != "":
+                    print(f"FATAL ERROR! Fasta file contains zOTUs not in count table: {heading}")
+                    sys.exit(1)
+                zOTU_dict[heading].append(sequence)
+                sequence = ''
+                heading = line.strip().strip(">")
+            else:
+                sequence += line.strip().upper()
+
+        # Final sequence
+        zOTU_dict[heading].append(sequence)
+
+    with open(output, 'w') as out:
+        out.write("OTU_ID\tSequence\t" + "\t".join(COUNT_headings) + "\n")
+        for zotu in zOTU_list:
+            out.write(f"{zotu}\t{zOTU_dict[zotu][1]}\t" + "\t".join(zOTU_dict[zotu][0]) + "\n")
+
+
+# Call it for all relevant files
+for file in os.listdir('.'):
+    if file.endswith('.zotus.fasta'):
+        sample = file.replace('.zotus.fasta', '')
+        counts_file = f"{sample}_zotu_table.txt"
+        fasta_file = f"{sample}.zotus.fasta"
+        output_file = f"{sample}_zotu_table_with_seq.txt"
+        add_seq_to_zotu(counts_file, fasta_file, output_file)
 
 os.system("mkdir raw_zotu && mv *_zotu_table.txt raw_zotu && mv *zotus.fasta raw_zotu")
 os.system("mkdir zotu_tables_with_sequences && mv *zotu_table_with_seq.txt zotu_tables_with_sequences")
@@ -160,7 +203,7 @@ subprocess.run("usearch -cluster_otus zotus.fasta -otus otus.fasta -relabel OTU 
 # Run sed command to clean up zotus.fasta
 subprocess.run("sed -E 's/;size=[0-9]+.*//g' zotus.fasta > new_zotus.fasta", shell=True)
 
-#os.system('clear')
+os.system('clear')
 
 # Run vsearch for taxonomic classification
 subprocess.run(f"vsearch --sintax new_zotus.fasta -db {db_path} -tabbedout zotus.tax -strand both -sintax_cutoff 0.8 -threads {j}", shell=True)
